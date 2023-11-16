@@ -1,6 +1,7 @@
 from django_q.tasks import async_task, result
 import json
 from django.contrib.gis.geos import Point
+from django.db import IntegrityError
 from .models import OutscraperTask, Company, Contact
 
 
@@ -15,37 +16,79 @@ def extract_name(full_name_key, outscraper_json):
 
 
 def extract_contacts():
+    ignore_words = ['privacy', 'applicants']
+
     companies_without_contacts = Company.objects.filter(contacts__isnull=True)
     print("Found", str(len(companies_without_contacts)), "companies without extracted contacts, attempting to extract...")
     
     created_count = 0
+    duplicates_skipped_count = 0
+    ignored_emails_count = 0
+
     for company in companies_without_contacts:
         # Loop through possible email keys and their corresponding full names.
         for i in range(1, 5): 
+            should_ignore_contact = False
+
             email_key = f'email_{i}'
             full_name_key = f'email_{i}_full_name'
 
             email_value = company.outscraper_json.get(email_key)
+
+            if not isinstance(email_value, str) or not email_value:
+                # Skip if invalid or empty e-mail
+                continue
+
+            for word in ignore_words:
+                if word.lower() in email_value.lower(): 
+                    should_ignore_contact = True
+                    ignored_emails_count += 1
+                    break
             
-            if isinstance(email_value, str) and email_value:  # Check that there's an actual string email present.
-                firstname, lastname = extract_name(full_name_key, company.outscraper_json)
+            if should_ignore_contact:
+                # Continue outer loop skipping this contact since it contains an ignored word.
+                continue
+            
 
+            firstname, lastname = extract_name(full_name_key, company.outscraper_json)
+
+            try:
+                # Try to update or create the contact safely within try-except block
                 contact_data = {
-                    'firstname': firstname,
-                    'lastname': lastname,
+                    'firstname': firstname.title(),
+                    'lastname': lastname.title(),
                 }
-
-                # Update or create the contact
+                
                 contact, created = Contact.objects.update_or_create(
+                    defaults=contact_data,
                     email=email_value,
-                    company=company,
-                    defaults=contact_data
+                    company=company
                 )
                 
-        if created:
-            created_count += 1
+                if created:
+                    created_count += 1
+                    
+            except IntegrityError as e:
+                duplicates_skipped_count += 1
+                
     
-    print("Done, extracted", str(created_count), "new contacts.")
+    print(f"""
+          Done, extracted {created_count} new contacts. 
+          Skipped {duplicates_skipped_count} duplicates 
+          and {ignored_emails_count} blacklisted word based emails.
+          """)
+    
+    avg_contacts_per_company = Contact.objects.all().count() / Company.objects.all().count()
+    avg_firstname_contacts_per_co = Contact.objects.exclude(
+            firstname__isnull=True
+        ).exclude(
+            firstname=''
+        ).count() / Company.objects.all().count()
+
+    print(f"""
+          On average there are now {avg_contacts_per_company} contacts per company in the db.
+          And {avg_firstname_contacts_per_co} per company that have a known name.
+          """)
 
 
 def process_outscraper_response():
@@ -71,3 +114,7 @@ def process_outscraper_response():
         task_object.was_processed = True
         task_object.save()
     print("Done,", str(created_count), "companies added")
+
+
+def personlise_emails():
+    pass

@@ -33,6 +33,7 @@ class Company(models.Model):
 	@property
 	def latitude(self):
 		return self.location.y
+
 	
 
 class Contact(models.Model):
@@ -47,5 +48,37 @@ class Contact(models.Model):
 			return self.firstname + ' ' + self.lastname
 		else:
 			return self.email
+		
+	
+	@property
+	def ps_text(self):
+		other_contacts_with_names = Contact.objects.filter(
+			company=self.company
+		).exclude(
+			pk=self.id
+		).exclude(
+			firstname=''
+		).exclude(
+			firstname__isnull=True
+		)
+
+		# Convert the QuerySet into a list of first names.
+		other_firstnames = [contact.firstname for contact in other_contacts_with_names]
+
+		if not other_firstnames:
+			return None  # Return nothing if no names
+
+		# Format the sentence based on number of contact names available.
+		if len(other_firstnames) == 1:
+			name_str = f"{other_firstnames[0]}."
+		else:
+			# Join all but last name with comma, append "and" before last name followed by full stop.
+			name_str = ", ".join(other_firstnames[:-1]) + " and " + f"{other_firstnames[-1]}."
+
+			ps_text = f"""
+			P.S Hopefully you're the right person to chat to about this, but I did also reach out to {name_str}
+			"""
+
+			return ps_text.strip()
 		
 
